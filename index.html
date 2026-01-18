@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Expense Tracker</title>
+    <style>
+        .card { border: 1px solid black; padding: 10px; margin: 10px 0; display: none; }
+        .card.active { display: block; }
+        .positive { color: green; }
+        .negative { color: red; }
+        .audit-log { background: #f5f5f5; padding: 10px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+        .contact-info { margin: 5px 0; }
+        .loading { color: gray; }
+        .connected { color: green; }
+        .github { position: fixed; bottom: 10px; right: 10px; font-size: 12px; color: gray; }
+    </style>
+</head>
+<body>
+    <div id="login">
+        <h2>Expense Tracker</h2>
+        <input type="password" id="password" placeholder="Enter password">
+        <button onclick="checkPassword()">Login</button>
+        <div id="loginError" style="color: red;"></div>
+    </div>
+
+    <div id="app" style="display: none;">
+    <h2>Expense Tracker</h2>
+    <div id="status" class="loading">Connecting to Convex...</div>
+
+    <div>
+        <input type="number" id="amount" placeholder="Amount">
+        <select id="person">
+            <option value="Z">Z</option>
+            <option value="N">N</option>
+            <option value="Av">Av</option>
+            <option value="Ay">Ay</option>
+            <option value="L">L</option>
+        </select>
+        <input type="text" id="note" placeholder="Note (e.g., dinner, groceries...)">
+        <button onclick="addExpense()">Add</button>
+    </div>
+
+    <h3>Expenses:</h3>
+    <ul id="expenseList"></ul>
+
+    <h3>Click to see balances:</h3>
+    <a href="#" onclick="showCard('Z'); return false;">Z</a> |
+    <a href="#" onclick="showCard('N'); return false;">N</a> |
+    <a href="#" onclick="showCard('Av'); return false;">Av</a> |
+    <a href="#" onclick="showCard('Ay'); return false;">Ay</a> |
+    <a href="#" onclick="showCard('L'); return false;">L</a>
+
+    <div id="card" class="card">
+        <h4 id="cardTitle"></h4>
+        <div id="cardContent"></div>
+    </div>
+
+    <hr>
+    <h3>Contact Information</h3>
+    <div>
+        <select id="contactPerson">
+            <option value="Z">Z</option>
+            <option value="N">N</option>
+            <option value="Av">Av</option>
+            <option value="Ay">Ay</option>
+            <option value="L">L</option>
+        </select>
+        <input type="text" id="platform" placeholder="Platform (Venmo, PayPal...)">
+        <input type="text" id="username" placeholder="Username/Email">
+        <button onclick="saveContact()">Save Contact</button>
+    </div>
+    <div id="contactList"></div>
+
+    <hr>
+    <h3>Audit Log (immutable)</h3>
+    <div id="auditLog" class="audit-log"></div>
+
+    <br>
+    <button onclick="exportExcel()">Export to Excel</button>
+
+    <div class="github"><a href="https://github.com/zimengxiong/58593b-expense-tracker" target="_blank">source ↗</a></div>
+    </div>
+
+    <script>
+        async function sha256(message) {
+            const msgBuffer = new TextEncoder().encode(message);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        async function checkPassword() {
+            const input = document.getElementById('password').value;
+            const hash = await sha256(input);
+            if (hash === "048cca692ad6a1edd18633b42e86df863266644d294ec992af1cd39f2153a63a") {
+                sessionStorage.setItem('auth', 'true');
+                showApp();
+            } else {
+                document.getElementById('loginError').textContent = 'Incorrect password';
+            }
+        }
+
+        function showApp() {
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+        }
+
+        if (sessionStorage.getItem('auth') === 'true') {
+            showApp();
+        }
+
+        document.getElementById('password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') checkPassword();
+        });
+
+        window.checkPassword = checkPassword;
+    </script>
+
+    <script type="module">
+        import { ConvexClient } from "https://esm.run/convex/browser";
+
+        const CONVEX_URL = "https://savory-poodle-180.convex.cloud";
+        const client = new ConvexClient(CONVEX_URL);
+        const people = ['Z', 'N', 'Av', 'Ay', 'L'];
+
+        let expenses = [];
+        let contacts = {};
+        let auditLog = [];
+
+        window.addExpense = addExpense;
+        window.removeExpense = removeExpense;
+        window.saveContact = saveContact;
+        window.showCard = showCard;
+        window.exportExcel = exportExcel;
+
+        let connected = false;
+        function setConnected() {
+            if (!connected) {
+                connected = true;
+                const status = document.getElementById('status');
+                status.textContent = 'Connected to Convex';
+                status.classList.remove('loading');
+                status.classList.add('connected');
+            }
+        }
+
+        client.onUpdate("expenses:list", {}, (data) => {
+            expenses = data || [];
+            renderExpenses();
+            setConnected();
+        });
+
+        client.onUpdate("contacts:list", {}, (data) => {
+            contacts = {};
+            (data || []).forEach(c => {
+                if (!contacts[c.person]) contacts[c.person] = [];
+                contacts[c.person].push({ platform: c.platform, username: c.username });
+            });
+            renderContacts();
+        });
+
+        client.onUpdate("auditLog:list", {}, (data) => {
+            auditLog = data || [];
+            renderAuditLog();
+        });
+
+        async function addExpense() {
+            const amount = parseFloat(document.getElementById('amount').value);
+            const person = document.getElementById('person').value;
+            const note = document.getElementById('note').value.trim();
+
+            if (!amount || amount <= 0) {
+                alert('Enter a valid amount');
+                return;
+            }
+
+            await client.mutation("expenses:add", { amount, paidBy: person, note: note || "" });
+            document.getElementById('amount').value = '';
+            document.getElementById('note').value = '';
+        }
+
+        async function removeExpense(id) {
+            await client.mutation("expenses:remove", { id });
+        }
+
+        async function saveContact() {
+            const person = document.getElementById('contactPerson').value;
+            const platform = document.getElementById('platform').value.trim();
+            const username = document.getElementById('username').value.trim();
+
+            if (!platform || !username) {
+                alert('Enter platform and username');
+                return;
+            }
+
+            await client.mutation("contacts:add", { person, platform, username });
+            document.getElementById('platform').value = '';
+            document.getElementById('username').value = '';
+        }
+
+        function renderExpenses() {
+            const list = document.getElementById('expenseList');
+            list.innerHTML = expenses.map(e => {
+                const noteStr = e.note ? ` - ${e.note}` : '';
+                return `<li>${e.paidBy} paid $${e.amount.toFixed(2)}${noteStr} <button onclick="removeExpense('${e._id}')">x</button></li>`;
+            }).join('');
+        }
+
+        function renderContacts() {
+            const list = document.getElementById('contactList');
+            let html = '';
+            people.forEach(p => {
+                if (contacts[p] && contacts[p].length > 0) {
+                    html += `<div class="contact-info"><b>${p}:</b> `;
+                    html += contacts[p].map(c => `${c.platform}: ${c.username}`).join(', ');
+                    html += '</div>';
+                }
+            });
+            list.innerHTML = html;
+        }
+
+        function renderAuditLog() {
+            const log = document.getElementById('auditLog');
+            log.innerHTML = auditLog.map(e =>
+                `[${e.timestamp}] ${e.action}: ${e.details}`
+            ).join('<br>');
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function calculateBalances() {
+            const balances = {};
+            people.forEach(p1 => {
+                balances[p1] = {};
+                people.forEach(p2 => balances[p1][p2] = 0);
+            });
+
+            expenses.forEach(exp => {
+                const share = exp.amount / people.length;
+                people.forEach(p => {
+                    if (p !== exp.paidBy) {
+                        balances[p][exp.paidBy] += share;
+                    }
+                });
+            });
+
+            const net = {};
+            people.forEach(p1 => {
+                net[p1] = {};
+                people.forEach(p2 => {
+                    if (p1 < p2) {
+                        const diff = balances[p1][p2] - balances[p2][p1];
+                        net[p1][p2] = diff;
+                    }
+                });
+            });
+
+            return net;
+        }
+
+        function showCard(person) {
+            const net = calculateBalances();
+            const card = document.getElementById('card');
+            const title = document.getElementById('cardTitle');
+            const content = document.getElementById('cardContent');
+
+            title.textContent = person + ' owes:';
+            let html = '';
+
+            if (contacts[person] && contacts[person].length > 0) {
+                html += '<div><b>Contact:</b> ';
+                html += contacts[person].map(c => `${c.platform}: ${c.username}`).join(', ');
+                html += '</div><br>';
+            }
+
+            people.forEach(other => {
+                if (other === person) return;
+
+                let owes = 0;
+                if (person < other) {
+                    owes = net[person][other];
+                } else {
+                    owes = -net[other][person];
+                }
+
+                let contactStr = '';
+                if (contacts[other] && contacts[other].length > 0) {
+                    contactStr = ' (' + contacts[other].map(c => `${c.platform}: ${c.username}`).join(', ') + ')';
+                }
+
+                if (Math.abs(owes) < 0.01) {
+                    html += `<div>${other}: settled${contactStr}</div>`;
+                } else if (owes > 0) {
+                    html += `<div class="negative">${other}: pay $${owes.toFixed(2)}${contactStr}</div>`;
+                } else {
+                    html += `<div class="positive">${other}: receive $${(-owes).toFixed(2)}${contactStr}</div>`;
+                }
+            });
+
+            content.innerHTML = html;
+            card.classList.add('active');
+        }
+
+        function exportExcel() {
+            const net = calculateBalances();
+            let csv = 'Expense Tracker Summary\n\n';
+
+            csv += 'All Expenses\n';
+            csv += 'Paid By,Amount,Note\n';
+            expenses.forEach(e => {
+                const note = e.note ? `"${e.note}"` : '';
+                csv += `${e.paidBy},${e.amount.toFixed(2)},${note}\n`;
+            });
+
+            csv += '\nWho Owes Whom (positive = row owes column)\n';
+            csv += ',' + people.join(',') + '\n';
+
+            people.forEach(p1 => {
+                let row = p1;
+                people.forEach(p2 => {
+                    if (p1 === p2) {
+                        row += ',-';
+                    } else {
+                        let owes = 0;
+                        if (p1 < p2) {
+                            owes = net[p1][p2];
+                        } else {
+                            owes = -net[p2][p1];
+                        }
+                        row += ',' + owes.toFixed(2);
+                    }
+                });
+                csv += row + '\n';
+            });
+
+            csv += '\nContact Information\n';
+            csv += 'Person,Platform,Username\n';
+            people.forEach(p => {
+                if (contacts[p]) {
+                    contacts[p].forEach(c => {
+                        csv += `${p},${c.platform},${c.username}\n`;
+                    });
+                }
+            });
+
+            csv += '\nAudit Log\n';
+            csv += 'Timestamp,Action,Details\n';
+            auditLog.forEach(e => {
+                csv += `${e.timestamp},${e.action},"${e.details}"\n`;
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'expenses.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
