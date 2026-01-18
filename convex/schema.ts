@@ -6,6 +6,8 @@ export default defineSchema({
     amount: v.number(),
     paidBy: v.string(),
     note: v.string(),
+    group: v.array(v.string()),
+    invoiceId: v.optional(v.id("_storage")),
     createdAt: v.number(),
   }),
 

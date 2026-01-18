@@ -21,7 +21,6 @@ export const add = mutation({
       username: args.username,
     });
 
-    // Add audit log entry
     await ctx.db.insert("auditLog", {
       timestamp: new Date().toISOString(),
       action: "CONTACT",

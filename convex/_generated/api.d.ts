@@ -11,6 +11,7 @@
 import type * as auditLog from "../auditLog.js";
 import type * as contacts from "../contacts.js";
 import type * as expenses from "../expenses.js";
+import type * as files from "../files.js";
 
 import type {
   ApiFromModules,
@@ -22,6 +23,7 @@ declare const fullApi: ApiFromModules<{
   auditLog: typeof auditLog;
   contacts: typeof contacts;
   expenses: typeof expenses;
+  files: typeof files;
 }>;
 
 /**
