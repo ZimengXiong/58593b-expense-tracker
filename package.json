@@ -6,6 +6,7 @@
     "deploy": "convex deploy"
   },
   "dependencies": {
+    "@vercel/analytics": "^1.6.1",
     "convex": "^1.17.0"
   }
 }
